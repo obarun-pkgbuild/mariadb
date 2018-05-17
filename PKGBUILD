@@ -5,21 +5,23 @@
 
 pkgbase=mariadb
 pkgname=('libmariadbclient' 'mariadb-clients' 'mytop' 'mariadb')
-pkgver=10.1.26
+pkgver=10.1.33
 pkgrel=2
 arch=(x86_64)
 license=(GPL)
 url='http://mariadb.org/'
-makedepends=('cmake' 'zlib' 'libaio' 'libxml2' 'openssl' 'pcre' 'jemalloc'
-             'lz4' 'boost' 'libevent')
+makedepends=('boost' 'bzip2' 'cmake' 'jemalloc' 'libaio' 'libxml2' 'lz4' 'lzo'
+             'openssl' 'zlib')
 source=("https://ftp.heanet.ie/mirrors/mariadb/mariadb-$pkgver/source/mariadb-$pkgver.tar.gz"
         '0001-openssl-1-1-0.patch'
+        '0002-mroonga-after-merge-CMakeLists.txt-fixes.patch'
         'mariadb-sysusers.conf'
         'mariadb-tmpfile.conf')
-sha256sums=('ba88b1cb9967dea2909938a34ba89373b162b0d83e5c98a0f1c94540156bf73d'
-            '40d298ca77c0459ade4ef9fc68a3a7450273b098b9f7edfb0a5251c5db434cfc'
-            'e1a22777c65854041f16fc0a2db3218d17b4d7e7ec7ab7a77cf49c71277c1515'
-            '2af318c52ae0fe5428e8a9245d1b0fc3bc5ce153842d1563329ceb1edfa83ddd')
+sha256sums=('94312c519f2c0c25e1964c64e22aff0036fb22dfb2685638f43a6b2211395d2d'
+            '229d556748119757f36be1e9956834be28db0f5a35cdacce53f6c640784fca77'
+            '98736aefef21e575e450f8066685ba82771264409412e33491ab0a54e4407ba7'
+            'd21fa98b57b3f44d1731551ac441bf24b75662fb26393757aa22f9cb92d470cd'
+            '5ff8916c32c87ac45f05171669ff94e5a1a81c6bd7e6516b63fd9db8723916fc')
 validpgpkeys=('6DD4217456569BA711566AC7F06E8FDE7B45DAAC') # Eric Vidal
 
 prepare() {
@@ -27,6 +29,14 @@ prepare() {
 
   # openssl 1.1.0
   patch -Np1 < "${srcdir}"/0001-openssl-1-1-0.patch
+  
+  # revert to fix the build
+  # mroonga after-merge CMakeLists.txt fixes
+  patch -Np1 -R < "${srcdir}"/0002-mroonga-after-merge-CMakeLists.txt-fixes.patch
+
+  # let's create the datadir from tmpfiles
+  echo 'd @MYSQL_DATADIR@ 0700 @MYSQLD_USER@ @MYSQLD_USER@ -' >> support-files/tmpfiles.conf.in
+
 }
 
 build() {
@@ -58,7 +68,7 @@ build() {
     -DWITH_READLINE=ON \
     -DWITH_ZLIB=system \
     -DWITH_SSL=system \
-    -DWITH_PCRE=system \
+    -DWITH_PCRE=bundled \
     -DWITH_LIBWRAP=OFF \
     -DWITH_JEMALLOC=ON \
     -DWITH_EXTRA_CHARSETS=complex \
@@ -71,17 +81,18 @@ build() {
     -DWITHOUT_EXAMPLE_STORAGE_ENGINE=1 \
     -DWITHOUT_FEDERATED_STORAGE_ENGINE=1 \
     -DWITHOUT_PBXT_STORAGE_ENGINE=1 \
+    -DPLUGIN_TOKUDB=NO \
     -DCMAKE_EXE_LINKER_FLAGS='-ljemalloc' \
     -DCMAKE_C_FLAGS="-fPIC $CFLAGS -fno-strict-aliasing -DBIG_JOINS=1 -fomit-frame-pointer -fno-delete-null-pointer-checks" \
     -DCMAKE_CXX_FLAGS="-fPIC $CXXFLAGS -fno-strict-aliasing -DBIG_JOINS=1 -felide-constructors -fno-rtti -fno-delete-null-pointer-checks" \
-    -DWITH_MYSQLD_LDFLAGS="-pie ${LDFLAGS}"
+    -DWITH_MYSQLD_LDFLAGS="-pie ${LDFLAGS},-z,now"
 
   make
 }
 
 package_libmariadbclient() {
   pkgdesc='MariaDB client libraries'
-  depends=('openssl' 'libaio' 'zlib' 'pcre' 'lz4' 'lzo' 'xz')
+  depends=('bzip2' 'libaio' 'lz4' 'lzo' 'openssl' 'xz' 'zlib')
   conflicts=('libmysqlclient')
 
   cd build
@@ -102,7 +113,7 @@ package_libmariadbclient() {
 
 package_mariadb-clients() {
   pkgdesc='MariaDB client tools'
-  depends=("libmariadbclient=${pkgver}" 'zlib' 'openssl' 'jemalloc')
+  depends=("libmariadbclient=${pkgver}" 'jemalloc')
   conflicts=('mysql-clients')
   provides=("mysql-clients=$pkgver")
 
@@ -130,8 +141,7 @@ package_mariadb() {
   backup=('etc/mysql/my.cnf'
           'etc/mysql/wsrep.cnf')
   install=mariadb.install
-  depends=("mariadb-clients=${pkgver}" 'inetutils' 'libaio' 'libxml2' 'pcre' 'jemalloc'
-           'lz4' 'boost-libs' 'lzo' 'libevent')
+  depends=("mariadb-clients=${pkgver}" 'inetutils' 'libxml2')
   optdepends=('galera: for MariaDB cluster with Galera WSREP'
               'perl-dbd-mysql: for mysqlhotcopy, mysql_convert_table_format and mysql_setpermission')
   conflicts=('mysql')
@@ -154,8 +164,8 @@ package_mariadb() {
   install -Dm0644 "${srcdir}"/mariadb-tmpfile.conf usr/lib/tmpfiles.d/mariadb.conf
   install -Dm0644 "${srcdir}"/mariadb-sysusers.conf usr/lib/sysusers.d/mariadb.conf
 
-  install -dm0700 var/lib/mysql
-  chown -R 89:89 var/lib/mysql &>/dev/null
+#  install -dm0700 var/lib/mysql
+#  chown -R 89:89 var/lib/mysql &>/dev/null
 
   # move to proper licenses directories
   install -d usr/share/licenses/mariadb
@@ -163,6 +173,9 @@ package_mariadb() {
 
   # already installed to real systemd unit directory
   #rm -r usr/share/mysql/systemd/
+
+  # left over from sysvinit
+  rm usr/bin/rcmysql
 
   # provided by libmariadbclient
   rm usr/bin/mysql_config
